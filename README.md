@@ -1,3 +1,4 @@
+HEAD
 # 船舶SMIS备件管理系统
 
 基于Vue3 + Node.js + MySQL的船舶备件管理系统
@@ -186,3 +187,5 @@ npm run client  # 前端服务（端口5173）
 
 ISC
 
+=======
+# DBS
