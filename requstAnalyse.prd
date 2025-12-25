@@ -1,0 +1,177 @@
+以下是根据你提供的PPT内容和要求，结合Vue3 + MySQL + Element Plus（ES组件库）技术栈，整理的一份**船舶SMIS备件管理模块产品需求文档（PRD）**，采用模块化开发思路，涵盖数据库设计、功能设计等，以Markdown格式输出：
+
+---
+
+# 船舶SMIS备件管理模块PRD
+
+## 项目概述
+船舶备件管理是保障船舶设备正常运行的重要环节，涉及备件分类、编码、库存监控、采购管理、出入库记录、权限控制等功能。本系统旨在通过信息化手段提升备件管理效率，实现船岸数据同步、全流程可追溯、智能预警与科学决策支持。
+
+## 技术栈
+- 前端：Vue3 + Element Plus
+- 后端：Node.js
+- 数据库：MySQL
+- 部署方式：本地部署（无需Docker）
+
+---
+
+## 一、系统角色与权限
+
+| 角色         | 权限说明                                                                 |
+|--------------|--------------------------------------------------------------------------|
+| 系统管理员   | 用户管理、权限分配、系统配置、数据备份与恢复                             |
+| 机务主管     | 审核采购计划、查看全船备件库存、审批出入库申请、查看各类报表             |
+| 采购员       | 管理供应商、发起采购申请、询价比价、跟踪订单状态                         |
+| 仓库管理员   | 管理出入库记录、执行库存盘点、维护库存状态、触发补货预警                 |
+| 普通船员     | 查询备件信息、申请领用备件、查看个人领用记录                             |
+
+---
+
+## 二、功能模块设计
+
+### 模块一：备件信息管理
+#### 功能点：
+1. 备件分类管理（树形结构）
+2. 备件编码生成与管理（支持手动/自动编码）
+3. 备件基本信息维护（名称、型号、规格、所属设备、图片等）
+4. 备件唯一标识（二维码/条形码生成与打印）
+
+#### 数据库表设计（示例）：
+```sql
+CREATE TABLE spare_part (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  code VARCHAR(50) UNIQUE COMMENT '备件编码',
+  name VARCHAR(100) COMMENT '备件名称',
+  category_id INT COMMENT '分类ID',
+  model VARCHAR(100) COMMENT '型号',
+  specification TEXT COMMENT '规格',
+  unit VARCHAR(20) COMMENT '单位',
+  image_url VARCHAR(255) COMMENT '图片地址',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+### 模块二：库存管理
+#### 功能点：
+1. 实时库存查询（船岸同步）
+2. 安全库存设置与预警
+3. 库存盘点功能（支持扫码盘点）
+4. 库存变动历史记录
+
+#### 数据库表设计：
+```sql
+CREATE TABLE inventory (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  part_id INT COMMENT '备件ID',
+  quantity INT DEFAULT 0 COMMENT '当前数量',
+  safe_quantity INT COMMENT '安全库存量',
+  location VARCHAR(100) COMMENT '存放位置',
+  last_check_time TIMESTAMP COMMENT '最近盘点时间',
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+```
+
+---
+
+### 模块三：采购管理
+#### 功能点：
+1. 采购计划制定与审批流程
+2. 供应商管理（基本信息、信誉评价）
+3. 询价比价管理
+4. 采购订单跟踪（状态：待审核、已下单、已发货、已入库）
+5. 采购合同与发票管理
+
+#### 数据库表设计：
+```sql
+CREATE TABLE purchase_order (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  order_no VARCHAR(50) UNIQUE COMMENT '订单号',
+  part_id INT COMMENT '备件ID',
+  supplier_id INT COMMENT '供应商ID',
+  quantity INT COMMENT '采购数量',
+  unit_price DECIMAL(10,2) COMMENT '单价',
+  status ENUM('draft','approved','ordered','shipped','received') DEFAULT 'draft',
+  created_by INT COMMENT '创建人',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+### 模块四：出入库管理
+#### 功能点：
+1. 入库管理（采购入库、调拨入库）
+2. 出库管理（领用出库、调拨出库）
+3. 批次管理与追溯
+4. 责任人记录与签字确认（支持电子签名）
+
+#### 数据库表设计：
+```sql
+CREATE TABLE inventory_transaction (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  part_id INT COMMENT '备件ID',
+  type ENUM('in','out') COMMENT '出入库类型',
+  quantity INT COMMENT '数量',
+  batch_no VARCHAR(50) COMMENT '批次号',
+  operator_id INT COMMENT '操作人',
+  transaction_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  remark TEXT COMMENT '备注'
+);
+```
+
+---
+
+### 模块五：供应商管理
+#### 功能点：
+1. 供应商信息维护
+2. 供应商评价与绩效管理
+3. 合作记录查询
+
+#### 数据库表设计：
+```sql
+CREATE TABLE supplier (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(100) COMMENT '供应商名称',
+  contact_person VARCHAR(50),
+  phone VARCHAR(20),
+  email VARCHAR(50),
+  address TEXT,
+  score DECIMAL(3,2) DEFAULT 5.0 COMMENT '评分',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+### 模块六：报表与统计
+#### 功能点：
+1. 库存报表（当前库存、低于安全库存清单）
+2. 采购报表（采购明细、供应商对比）
+3. 出入库流水报表
+4. 备件使用频率分析
+5. 支持导出Excel/PDF
+
+---
+
+### 模块七：用户与权限管理
+#### 功能点：
+1. 用户管理（增删改查）
+2. 角色管理（权限组）
+3. 菜单权限与操作权限控制
+4. 登录日志与操作审计
+
+#### 数据库表设计：
+```sql
+CREATE TABLE user (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  username VARCHAR(50) UNIQUE,
+  password VARCHAR(255),
+  real_name VARCHAR(50),
+  role_id INT COMMENT '角色ID',
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
