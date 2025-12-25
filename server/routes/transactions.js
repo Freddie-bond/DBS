@@ -19,7 +19,9 @@ const generateBatchNo = () => {
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page = 1, pageSize = 10, type, transaction_type, part_id, start_date, end_date } = req.query;
-    const offset = (page - 1) * pageSize;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSizeNum = Math.max(1, parseInt(pageSize) || 10);
+    const offset = Math.max(0, (pageNum - 1) * pageSizeNum);
 
     let sql = `
       SELECT it.*, sp.code as part_code, sp.name as part_name, sp.model, sp.unit,
@@ -44,7 +46,7 @@ router.get('/', authMiddleware, async (req, res) => {
     }
     if (part_id) {
       sql += ' AND it.part_id = ?';
-      params.push(part_id);
+      params.push(Number(part_id));
     }
     if (start_date) {
       sql += ' AND DATE(it.transaction_time) >= ?';
@@ -61,8 +63,7 @@ router.get('/', authMiddleware, async (req, res) => {
       params.push(req.user.id, req.user.id);
     }
 
-    sql += ' ORDER BY it.transaction_time DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(pageSize), offset);
+    sql += ` ORDER BY it.transaction_time DESC LIMIT ${Number(pageSizeNum)} OFFSET ${Number(offset)}`;
 
     const [transactions] = await pool.execute(sql, params);
     
@@ -109,8 +110,8 @@ router.get('/', authMiddleware, async (req, res) => {
       data: {
         list: transactions,
         total: countResult[0].total,
-        page: parseInt(page),
-        pageSize: parseInt(pageSize)
+        page: pageNum,
+        pageSize: pageSizeNum
       }
     });
   } catch (error) {
@@ -158,26 +159,35 @@ router.post('/in', authMiddleware, async (req, res) => {
 
     const finalBatchNo = batch_no || generateBatchNo();
 
-    // 创建出入库记录
-    const [result] = await pool.execute(
-      `INSERT INTO inventory_transaction 
-       (part_id, type, quantity, batch_no, transaction_type, related_order_id, operator_id, location, remark)
-       VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?)`,
-      [part_id, quantity, finalBatchNo, transaction_type, related_order_id, req.user.id, location, remark]
-    );
-
-    // 更新库存
-    await pool.execute(
-      'UPDATE inventory SET quantity = quantity + ?, location = COALESCE(?, location), last_check_time = NOW() WHERE part_id = ?',
-      [quantity, location, part_id]
-    );
-
-    // 如果是采购入库，更新采购订单状态
-    if (related_order_id && transaction_type === 'purchase') {
-      await pool.execute(
-        "UPDATE purchase_order SET status = 'received' WHERE id = ?",
-        [related_order_id]
+    // 开始事务处理
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      
+      // 创建出入库记录
+      const [result] = await connection.execute(
+        `INSERT INTO inventory_transaction 
+         (part_id, type, quantity, batch_no, transaction_type, related_order_id, operator_id, location, remark)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [part_id, 'in', quantity, finalBatchNo, transaction_type, related_order_id, req.user.id, location, remark]
       );
+
+      // 如果是采购入库，更新采购订单状态
+      if (related_order_id && transaction_type === 'purchase') {
+        await connection.execute(
+          "UPDATE purchase_order SET status = 'received' WHERE id = ?",
+          [related_order_id]
+        );
+      }
+      
+      await connection.commit();
+      
+      res.json({ code: 200, message: '入库成功', data: { id: result.insertId, batch_no: finalBatchNo } });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
 
     res.json({ code: 200, message: '入库成功', data: { id: result.insertId, batch_no: finalBatchNo } });
@@ -207,21 +217,28 @@ router.post('/out', authMiddleware, async (req, res) => {
 
     const finalBatchNo = batch_no || generateBatchNo();
 
-    // 创建出入库记录
-    const [result] = await pool.execute(
-      `INSERT INTO inventory_transaction 
-       (part_id, type, quantity, batch_no, transaction_type, operator_id, receiver_id, location, remark)
-       VALUES (?, 'out', ?, ?, ?, ?, ?, ?, ?)`,
-      [part_id, quantity, finalBatchNo, transaction_type, req.user.id, receiver_id, location, remark]
-    );
+    // 开始事务处理
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      
+      // 创建出入库记录
+      const [result] = await connection.execute(
+        `INSERT INTO inventory_transaction 
+         (part_id, type, quantity, batch_no, transaction_type, operator_id, receiver_id, location, remark)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [part_id, 'out', quantity, finalBatchNo, transaction_type, req.user.id, receiver_id, location, remark]
+      );
 
-    // 更新库存
-    await pool.execute(
-      'UPDATE inventory SET quantity = quantity - ?, last_check_time = NOW() WHERE part_id = ?',
-      [quantity, part_id]
-    );
-
-    res.json({ code: 200, message: '出库成功', data: { id: result.insertId, batch_no: finalBatchNo } });
+      await connection.commit();
+      
+      res.json({ code: 200, message: '出库成功', data: { id: result.insertId, batch_no: finalBatchNo } });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   } catch (error) {
     console.error('出库操作错误:', error);
     res.status(500).json({ code: 500, message: '服务器错误', error: error.message });
@@ -238,31 +255,44 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ code: 403, message: '无权限删除' });
     }
 
-    // 获取记录信息
-    const [transactions] = await pool.execute('SELECT * FROM inventory_transaction WHERE id = ?', [id]);
-    if (transactions.length === 0) {
-      return res.status(404).json({ code: 404, message: '记录不存在' });
+    // 开始事务处理
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      
+      // 获取记录信息
+      const [transactions] = await connection.execute('SELECT * FROM inventory_transaction WHERE id = ?', [id]);
+      if (transactions.length === 0) {
+        return res.status(404).json({ code: 404, message: '记录不存在' });
+      }
+
+      const transaction = transactions[0];
+
+      // 回滚库存
+      if (transaction.type === 'in') {
+        await connection.execute(
+          'UPDATE inventory SET quantity = quantity - ? WHERE part_id = ?',
+          [transaction.quantity, transaction.part_id]
+        );
+      } else {
+        await connection.execute(
+          'UPDATE inventory SET quantity = quantity + ? WHERE part_id = ?',
+          [transaction.quantity, transaction.part_id]
+        );
+      }
+
+      // 删除记录
+      await connection.execute('DELETE FROM inventory_transaction WHERE id = ?', [id]);
+      
+      await connection.commit();
+      
+      res.json({ code: 200, message: '删除成功' });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
-
-    const transaction = transactions[0];
-
-    // 回滚库存
-    if (transaction.type === 'in') {
-      await pool.execute(
-        'UPDATE inventory SET quantity = quantity - ? WHERE part_id = ?',
-        [transaction.quantity, transaction.part_id]
-      );
-    } else {
-      await pool.execute(
-        'UPDATE inventory SET quantity = quantity + ? WHERE part_id = ?',
-        [transaction.quantity, transaction.part_id]
-      );
-    }
-
-    // 删除记录
-    await pool.execute('DELETE FROM inventory_transaction WHERE id = ?', [id]);
-
-    res.json({ code: 200, message: '删除成功' });
   } catch (error) {
     console.error('删除出入库记录错误:', error);
     res.status(500).json({ code: 500, message: '服务器错误', error: error.message });

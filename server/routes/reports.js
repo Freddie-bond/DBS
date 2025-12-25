@@ -222,23 +222,25 @@ router.get('/usage-frequency', authMiddleware, async (req, res) => {
              COUNT(it.id) as usage_count,
              SUM(CASE WHEN it.type = 'out' THEN it.quantity ELSE 0 END) as total_out_quantity
       FROM spare_part sp
-      LEFT JOIN inventory_transaction it ON sp.id = it.part_id AND it.type = 'out'
+      LEFT JOIN inventory_transaction it ON sp.id = it.part_id
     `;
     const params = [];
-    const joinConditions = [];
+    const whereConditions = [];
 
+    // 添加类型条件
+    whereConditions.push("it.type = 'out'");
+    
     if (start_date) {
-      joinConditions.push('DATE(it.transaction_time) >= ?');
+      whereConditions.push('DATE(it.transaction_time) >= ?');
       params.push(start_date);
     }
     if (end_date) {
-      joinConditions.push('DATE(it.transaction_time) <= ?');
+      whereConditions.push('DATE(it.transaction_time) <= ?');
       params.push(end_date);
     }
     
-    if (joinConditions.length > 0) {
-      sql = sql.replace('LEFT JOIN inventory_transaction it ON sp.id = it.part_id AND it.type = \'out\'',
-        `LEFT JOIN inventory_transaction it ON sp.id = it.part_id AND it.type = 'out' AND ${joinConditions.join(' AND ')}`);
+    if (whereConditions.length > 0) {
+      sql += ` WHERE ${whereConditions.join(' AND ')}`;
     }
 
     sql += `

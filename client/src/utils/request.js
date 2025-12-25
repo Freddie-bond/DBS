@@ -3,7 +3,7 @@ import { ElMessage } from 'element-plus'
 import router from '@/router'
 
 const request = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api',
+  baseURL: 'http://localhost:8080/api',  // 硬编码后端API地址
   timeout: 10000
 })
 
@@ -50,4 +50,3 @@ request.interceptors.response.use(
 )
 
 export default request
-

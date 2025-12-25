@@ -7,7 +7,9 @@ const authMiddleware = require('../middleware/auth');
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page = 1, pageSize = 10, keyword = '' } = req.query;
-    const offset = (page - 1) * pageSize;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSizeNum = Math.max(1, parseInt(pageSize) || 10);
+    const offset = Math.max(0, (pageNum - 1) * pageSizeNum);
 
     let sql = 'SELECT * FROM supplier WHERE 1=1';
     const params = [];
@@ -17,8 +19,7 @@ router.get('/', authMiddleware, async (req, res) => {
       params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
     }
 
-    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(pageSize), offset);
+    sql += ` ORDER BY created_at DESC LIMIT ${Number(pageSizeNum)} OFFSET ${Number(offset)}`;
 
     const [suppliers] = await pool.execute(sql, params);
     
@@ -36,8 +37,8 @@ router.get('/', authMiddleware, async (req, res) => {
       data: {
         list: suppliers,
         total: countResult[0].total,
-        page: parseInt(page),
-        pageSize: parseInt(pageSize)
+        page: pageNum,
+        pageSize: pageSizeNum
       }
     });
   } catch (error) {
@@ -159,6 +160,12 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     const [orders] = await pool.execute('SELECT COUNT(*) as count FROM purchase_order WHERE supplier_id = ?', [id]);
     if (orders[0].count > 0) {
       return res.status(400).json({ code: 400, message: '该供应商存在采购订单，无法删除' });
+    }
+
+    // 检查是否有相关的操作日志
+    const [operationLogs] = await pool.execute('SELECT COUNT(*) as count FROM operation_log WHERE JSON_CONTAINS(description, ?, "$.supplier_id")', [JSON.stringify(id)]);
+    if (operationLogs[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该供应商有相关操作记录，无法删除' });
     }
 
     await pool.execute('DELETE FROM supplier WHERE id = ?', [id]);

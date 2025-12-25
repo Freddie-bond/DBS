@@ -7,7 +7,9 @@ const authMiddleware = require('../middleware/auth');
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page = 1, pageSize = 10, keyword = '', low_stock } = req.query;
-    const offset = (page - 1) * pageSize;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSizeNum = Math.max(1, parseInt(pageSize) || 10);
+    const offset = Math.max(0, (pageNum - 1) * pageSizeNum);
 
     let sql = `
       SELECT i.*, sp.code, sp.name, sp.model, sp.unit, sp.category_id, c.name as category_name,
@@ -27,8 +29,7 @@ router.get('/', authMiddleware, async (req, res) => {
       sql += ' AND i.quantity <= i.safe_quantity';
     }
 
-    sql += ' ORDER BY is_low_stock DESC, sp.name LIMIT ? OFFSET ?';
-    params.push(parseInt(pageSize), offset);
+    sql += ` ORDER BY is_low_stock DESC, sp.name LIMIT ${Number(pageSizeNum)} OFFSET ${Number(offset)}`;
 
     const [inventory] = await pool.execute(sql, params);
     
@@ -55,8 +56,8 @@ router.get('/', authMiddleware, async (req, res) => {
       data: {
         list: inventory,
         total: countResult[0].total,
-        page: parseInt(page),
-        pageSize: parseInt(pageSize)
+        page: pageNum,
+        pageSize: pageSizeNum
       }
     });
   } catch (error) {
@@ -116,28 +117,42 @@ router.post('/check', authMiddleware, async (req, res) => {
     const currentQuantity = inventory[0].quantity;
     const difference = actual_quantity - currentQuantity;
 
-    // 更新库存
-    await pool.execute(
-      'UPDATE inventory SET quantity = ?, location = ?, last_check_time = NOW() WHERE part_id = ?',
-      [actual_quantity, location || inventory[0].location, part_id]
-    );
-
-    // 如果有差异，记录调整单
-    if (difference !== 0) {
-      await pool.execute(
-        `INSERT INTO inventory_transaction (part_id, type, quantity, transaction_type, operator_id, remark)
-         VALUES (?, ?, ?, 'adjustment', ?, ?)`,
-        [
-          part_id,
-          difference > 0 ? 'in' : 'out',
-          Math.abs(difference),
-          req.user.id,
-          `库存盘点调整，原数量：${currentQuantity}，盘点数量：${actual_quantity}`
-        ]
+    // 开始事务处理
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      
+      // 更新库存
+      await connection.execute(
+        'UPDATE inventory SET quantity = ?, location = ?, last_check_time = NOW() WHERE part_id = ?',
+        [actual_quantity, location || inventory[0].location, part_id]
       );
-    }
 
-    res.json({ code: 200, message: '盘点成功', data: { difference } });
+      // 如果有差异，记录调整单
+      if (difference !== 0) {
+        await connection.execute(
+          `INSERT INTO inventory_transaction (part_id, type, quantity, transaction_type, operator_id, remark)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            part_id,
+            difference > 0 ? 'in' : 'out',
+            Math.abs(difference),
+            'adjustment',
+            req.user.id,
+            `库存盘点调整，原数量：${currentQuantity}，盘点数量：${actual_quantity}`
+          ]
+        );
+      }
+      
+      await connection.commit();
+      
+      res.json({ code: 200, message: '盘点成功', data: { difference } });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   } catch (error) {
     console.error('库存盘点错误:', error);
     res.status(500).json({ code: 500, message: '服务器错误', error: error.message });

@@ -8,7 +8,9 @@ const authMiddleware = require('../middleware/auth');
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page = 1, pageSize = 10, keyword = '' } = req.query;
-    const offset = (page - 1) * pageSize;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSizeNum = Math.max(1, parseInt(pageSize) || 10);
+    const offset = Math.max(0, (pageNum - 1) * pageSizeNum);
 
     let sql = `
       SELECT u.*, r.name as role_name 
@@ -23,8 +25,7 @@ router.get('/', authMiddleware, async (req, res) => {
       params.push(`%${keyword}%`, `%${keyword}%`);
     }
 
-    sql += ' ORDER BY u.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(pageSize), offset);
+    sql += ` ORDER BY u.created_at DESC LIMIT ${Number(pageSizeNum)} OFFSET ${Number(offset)}`;
 
     const [users] = await pool.execute(sql, params);
     
@@ -47,8 +48,8 @@ router.get('/', authMiddleware, async (req, res) => {
       data: {
         list: users,
         total: countResult[0].total,
-        page: parseInt(page),
-        pageSize: parseInt(pageSize)
+        page: pageNum,
+        pageSize: pageSizeNum
       }
     });
   } catch (error) {
@@ -98,7 +99,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     }
     if (role_id !== undefined) {
       updates.push('role_id = ?');
-      params.push(role_id);
+      params.push(Number(role_id));
     }
     if (is_active !== undefined) {
       updates.push('is_active = ?');
@@ -131,6 +132,31 @@ router.put('/:id', authMiddleware, async (req, res) => {
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // 检查用户是否是某些记录的创建者或操作者
+    const [purchaseOrders] = await pool.execute('SELECT COUNT(*) as count FROM purchase_order WHERE created_by = ? OR approved_by = ?', [id, id]);
+    if (purchaseOrders[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该用户创建或审批了采购订单，无法删除' });
+    }
+    
+    // 检查是否有出入库操作记录
+    const [transactions] = await pool.execute('SELECT COUNT(*) as count FROM inventory_transaction WHERE operator_id = ? OR receiver_id = ?', [id, id]);
+    if (transactions[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该用户有出入库操作记录，无法删除' });
+    }
+    
+    // 检查是否有操作日志记录
+    const [operationLogs] = await pool.execute('SELECT COUNT(*) as count FROM operation_log WHERE user_id = ?', [id]);
+    if (operationLogs[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该用户有操作日志记录，无法删除' });
+    }
+    
+    // 检查是否有登录日志记录
+    const [loginLogs] = await pool.execute('SELECT COUNT(*) as count FROM login_log WHERE user_id = ?', [id]);
+    if (loginLogs[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该用户有登录日志记录，无法删除' });
+    }
+    
     await pool.execute('DELETE FROM user WHERE id = ?', [id]);
     res.json({ code: 200, message: '删除成功' });
   } catch (error) {

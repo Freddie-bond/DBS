@@ -41,8 +41,14 @@ router.post('/login', async (req, res) => {
     );
 
     const token = jwt.sign(
-      { id: user.id, username: user.username, role_id: user.role_id, role_name: user.role_name },
-      process.env.JWT_SECRET || 'your-secret-key',
+      { 
+        id: user.id, 
+        username: user.username, 
+        role_id: user.role_id, 
+        role_name: user.role_name,
+        permissions: user.permissions ? JSON.parse(user.permissions) : {}
+      },
+      'your-super-secret-jwt-key-change-in-production-which-is-long-enough-for-security',
       { expiresIn: '24h' }
     );
 
@@ -93,6 +99,21 @@ router.get('/me', require('../middleware/auth'), async (req, res) => {
     });
   } catch (error) {
     console.error('获取用户信息错误:', error);
+    res.status(500).json({ code: 500, message: '服务器错误', error: error.message });
+  }
+});
+
+// 登出
+router.post('/logout', require('../middleware/auth'), async (req, res) => {
+  try {
+    // 在实际应用中，可以将token加入黑名单或存储在Redis中进行管理
+    // 这里简单返回成功信息
+    res.json({
+      code: 200,
+      message: '登出成功'
+    });
+  } catch (error) {
+    console.error('登出错误:', error);
     res.status(500).json({ code: 500, message: '服务器错误', error: error.message });
   }
 });

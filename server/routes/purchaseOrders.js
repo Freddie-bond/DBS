@@ -24,7 +24,9 @@ const generateOrderNo = async () => {
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page = 1, pageSize = 10, status, keyword = '' } = req.query;
-    const offset = (page - 1) * pageSize;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSizeNum = Math.max(1, parseInt(pageSize) || 10);
+    const offset = Math.max(0, (pageNum - 1) * pageSizeNum);
 
     let sql = `
       SELECT po.*, sp.code as part_code, sp.name as part_name, s.name as supplier_name,
@@ -47,8 +49,7 @@ router.get('/', authMiddleware, async (req, res) => {
       params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
     }
 
-    sql += ' ORDER BY po.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(pageSize), offset);
+    sql += ` ORDER BY po.created_at DESC LIMIT ${Number(pageSizeNum)} OFFSET ${Number(offset)}`;
 
     const [orders] = await pool.execute(sql, params);
     
@@ -78,8 +79,8 @@ router.get('/', authMiddleware, async (req, res) => {
       data: {
         list: orders,
         total: countResult[0].total,
-        page: parseInt(page),
-        pageSize: parseInt(pageSize)
+        page: pageNum,
+        pageSize: pageSizeNum
       }
     });
   } catch (error) {
@@ -167,7 +168,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
     if (supplier_id !== undefined) {
       updates.push('supplier_id = ?');
-      params.push(supplier_id);
+      params.push(Number(supplier_id));
     }
     if (quantity !== undefined) {
       updates.push('quantity = ?');
@@ -178,6 +179,11 @@ router.put('/:id', authMiddleware, async (req, res) => {
       params.push(unit_price);
     }
     if (status !== undefined) {
+      // 验证状态转换是否合法
+      if (!['draft', 'pending', 'approved', 'ordered', 'shipped', 'received', 'cancelled'].includes(status)) {
+        return res.status(400).json({ code: 400, message: '无效的订单状态' });
+      }
+      
       updates.push('status = ?');
       params.push(status);
       
@@ -225,6 +231,12 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     }
     if (orders[0].status !== 'draft') {
       return res.status(400).json({ code: 400, message: '只能删除草稿状态的订单' });
+    }
+
+    // 检查是否有相关的出入库记录
+    const [transactions] = await pool.execute('SELECT COUNT(*) as count FROM inventory_transaction WHERE related_order_id = ?', [id]);
+    if (transactions[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该订单已有出入库记录，无法删除' });
     }
 
     await pool.execute('DELETE FROM purchase_order WHERE id = ?', [id]);

@@ -24,7 +24,9 @@ const generateCode = async () => {
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page = 1, pageSize = 10, keyword = '', category_id } = req.query;
-    const offset = (page - 1) * pageSize;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSizeNum = Math.max(1, parseInt(pageSize) || 10);
+    const offset = Math.max(0, (pageNum - 1) * pageSizeNum);
 
     let sql = `
       SELECT sp.*, c.name as category_name, i.quantity, i.safe_quantity, i.location
@@ -41,11 +43,10 @@ router.get('/', authMiddleware, async (req, res) => {
     }
     if (category_id) {
       sql += ' AND sp.category_id = ?';
-      params.push(category_id);
+      params.push(Number(category_id));
     }
 
-    sql += ' ORDER BY sp.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(pageSize), offset);
+    sql += ` ORDER BY sp.created_at DESC LIMIT ${Number(pageSizeNum)} OFFSET ${Number(offset)}`;
 
     const [parts] = await pool.execute(sql, params);
     
@@ -73,8 +74,8 @@ router.get('/', authMiddleware, async (req, res) => {
       data: {
         list: parts,
         total: countResult[0].total,
-        page: parseInt(page),
-        pageSize: parseInt(pageSize)
+        page: pageNum,
+        pageSize: pageSizeNum
       }
     });
   } catch (error) {
@@ -153,7 +154,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     }
     if (category_id !== undefined) {
       updates.push('category_id = ?');
-      params.push(category_id);
+      params.push(Number(category_id));
     }
     if (model !== undefined) {
       updates.push('model = ?');
@@ -194,6 +195,25 @@ router.put('/:id', authMiddleware, async (req, res) => {
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // 检查是否有库存记录
+    const [inventory] = await pool.execute('SELECT COUNT(*) as count FROM inventory WHERE part_id = ?', [id]);
+    if (inventory[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该备件存在库存记录，无法删除' });
+    }
+    
+    // 检查是否有采购订单关联
+    const [orders] = await pool.execute('SELECT COUNT(*) as count FROM purchase_order WHERE part_id = ?', [id]);
+    if (orders[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该备件存在采购订单，无法删除' });
+    }
+    
+    // 检查是否有出入库记录
+    const [transactions] = await pool.execute('SELECT COUNT(*) as count FROM inventory_transaction WHERE part_id = ?', [id]);
+    if (transactions[0].count > 0) {
+      return res.status(400).json({ code: 400, message: '该备件存在出入库记录，无法删除' });
+    }
+    
     await pool.execute('DELETE FROM spare_part WHERE id = ?', [id]);
     res.json({ code: 200, message: '删除成功' });
   } catch (error) {

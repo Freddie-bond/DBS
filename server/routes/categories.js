@@ -71,7 +71,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     }
     if (parent_id !== undefined) {
       updates.push('parent_id = ?');
-      params.push(parent_id);
+      params.push(parent_id === null ? null : Number(parent_id));
     }
     if (code !== undefined) {
       updates.push('code = ?');
